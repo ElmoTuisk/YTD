@@ -1,0 +1,84 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install ffmpeg create-dmg
+
+      - name: Install Python dependencies
+        run: |
+          pip install PyQt6 yt-dlp requests pyinstaller
+
+      - name: Copy ffmpeg binaries
+        run: |
+          cp $(which ffmpeg) ./ffmpeg
+          cp $(which ffprobe) ./ffprobe
+
+      - name: Convert icon
+        run: |
+          if [ -f icon.ico ]; then
+            mkdir -p icon.iconset
+            sips -s format png icon.ico --out icon.iconset/icon_512x512.png
+            sips -z 16 16     icon.iconset/icon_512x512.png --out icon.iconset/icon_16x16.png
+            sips -z 32 32     icon.iconset/icon_512x512.png --out icon.iconset/icon_16x16@2x.png
+            sips -z 32 32     icon.iconset/icon_512x512.png --out icon.iconset/icon_32x32.png
+            sips -z 64 64     icon.iconset/icon_512x512.png --out icon.iconset/icon_32x32@2x.png
+            sips -z 128 128   icon.iconset/icon_512x512.png --out icon.iconset/icon_128x128.png
+            sips -z 256 256   icon.iconset/icon_512x512.png --out icon.iconset/icon_128x128@2x.png
+            sips -z 256 256   icon.iconset/icon_512x512.png --out icon.iconset/icon_256x256.png
+            sips -z 512 512   icon.iconset/icon_512x512.png --out icon.iconset/icon_256x256@2x.png
+            sips -z 1024 1024 icon.iconset/icon_512x512.png --out icon.iconset/icon_512x512@2x.png
+            iconutil -c icns icon.iconset -o icon.icns
+            rm -rf icon.iconset
+          fi
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --clean --noconfirm main.spec
+
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "YTD" \
+            --volicon "icon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "YTD.app" 175 190 \
+            --hide-extension "YTD.app" \
+            --app-drop-link 425 190 \
+            --no-internet-enable \
+            "dist/YTD-Installer.dmg" \
+            "dist/YTD.app" || true
+
+          # Fallback if create-dmg fails
+          if [ ! -f "dist/YTD-Installer.dmg" ]; then
+            mkdir -p dist/dmg_temp
+            cp -R dist/YTD.app dist/dmg_temp/
+            ln -s /Applications dist/dmg_temp/Applications
+            hdiutil create -volname "YTD" -srcfolder dist/dmg_temp -ov -format UDZO dist/YTD-Installer.dmg
+            rm -rf dist/dmg_temp
+          fi
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTD-macOS
+          path: dist/YTD-Installer.dmg
