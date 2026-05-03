@@ -2,7 +2,7 @@
 
 A lightweight desktop app for downloading music and videos from YouTube and Spotify. Built with Python and PyQt6.
 
-![YTD Screenshot](assets/screenshot.png)
+![YTD Screenshot](screenshot.png)
 
 ## Features
 
