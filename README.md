@@ -8,6 +8,8 @@ A lightweight desktop app for downloading music and videos from YouTube and Spot
 
 - **YouTube Downloads** — Video (MP4), Audio (MP3), or Audio (WAV)
 - **Spotify Downloads** — Tracks, albums, and playlists (downloaded as MP3 via YouTube search)
+- **Album Art & Metadata** — Spotify downloads are tagged with title, artist, album name, and cover art (ID3 tags)
+- **YouTube Thumbnail Embedding** — MP3 downloads from YouTube include the video thumbnail
 - **Quality Selection** — Video: Best / 1080p / 720p / 480p | Audio: 320 / 192 / 128 kbps
 - **Download History** — Right-click to open file or folder
 - **Paste from Clipboard** — One-click URL pasting
@@ -28,7 +30,7 @@ A lightweight desktop app for downloading music and videos from YouTube and Spot
 **Requirements:** Python 3.11+, FFmpeg
 
 ```bash
-pip install PyQt6 yt-dlp requests
+pip install PyQt6 yt-dlp requests mutagen
 python main.py
 ```
 
@@ -59,6 +61,7 @@ chmod +x build_mac.sh
 - **Downloader:** yt-dlp
 - **Audio Processing:** FFmpeg (bundled)
 - **Spotify Integration:** Pathfinder GraphQL API (reverse-engineered)
+- **Metadata:** mutagen (ID3 tag embedding)
 
 ## License
 
