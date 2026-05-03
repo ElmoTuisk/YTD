@@ -13,5 +13,6 @@ data class DownloadScreenState(
     val availableQualities: List<String> = listOf("Best", "High (1080p)", "Medium (720p)", "Low (480p)"),
     val downloadState: DownloadState = DownloadState.Idle,
     val history: List<HistoryItem> = emptyList(),
-    val errorMessage: String? = null,
+    val outputFolderDisplay: String = "Default (App Storage)",
+    val hasCustomFolder: Boolean = false,
 )

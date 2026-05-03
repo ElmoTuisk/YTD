@@ -3,6 +3,10 @@ package com.elmotuisk.ytd.ui.download
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.elmotuisk.ytd.data.model.DownloadConfig
@@ -38,6 +42,7 @@ class DownloadViewModel @Inject constructor(
         val platform: Platform = Platform.YOUTUBE,
         val format: DownloadFormat = DownloadFormat.VIDEO_MP4,
         val quality: String = "Best",
+        val outputFolderUri: String = "",
         val prefsLoaded: Boolean = false,
     )
 
@@ -49,12 +54,12 @@ class DownloadViewModel @Inject constructor(
         downloadManager.downloadState,
         preferencesRepository.preferences,
     ) { local, history, dlState, prefs ->
-        // Load saved preferences on first emission
         val state = if (!local.prefsLoaded) {
             local.copy(
                 platform = prefs.lastPlatform,
                 format = if (prefs.lastPlatform == Platform.SPOTIFY) DownloadFormat.AUDIO_MP3 else prefs.lastFormat,
                 quality = prefs.lastQuality,
+                outputFolderUri = prefs.outputFolderUri,
                 prefsLoaded = true,
             )
         } else {
@@ -67,6 +72,12 @@ class DownloadViewModel @Inject constructor(
 
         val qualities = qualitiesForFormat(state.format)
 
+        val folderDisplay = if (state.outputFolderUri.isNotEmpty()) {
+            getFolderDisplayName(state.outputFolderUri)
+        } else {
+            "Default (App Storage)"
+        }
+
         DownloadScreenState(
             url = state.url,
             platform = state.platform,
@@ -75,6 +86,8 @@ class DownloadViewModel @Inject constructor(
             availableQualities = qualities,
             downloadState = dlState,
             history = history,
+            outputFolderDisplay = folderDisplay,
+            hasCustomFolder = state.outputFolderUri.isNotEmpty(),
         )
     }.stateIn(
         scope = viewModelScope,
@@ -84,7 +97,6 @@ class DownloadViewModel @Inject constructor(
 
     fun onUrlChanged(url: String) {
         localState.update { it.copy(url = url) }
-        // Auto-detect platform from URL
         if ("spotify.com" in url) {
             onPlatformChanged(Platform.SPOTIFY)
         } else if ("youtube.com" in url || "youtu.be" in url) {
@@ -118,6 +130,21 @@ class DownloadViewModel @Inject constructor(
         viewModelScope.launch { preferencesRepository.saveQuality(quality) }
     }
 
+    fun onFolderSelected(uri: Uri) {
+        // Take persistable permission so we can access this folder after app restart
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        application.contentResolver.takePersistableUriPermission(uri, flags)
+
+        val uriString = uri.toString()
+        localState.update { it.copy(outputFolderUri = uriString) }
+        viewModelScope.launch { preferencesRepository.saveOutputFolderUri(uriString) }
+    }
+
+    fun onResetFolder() {
+        localState.update { it.copy(outputFolderUri = "") }
+        viewModelScope.launch { preferencesRepository.saveOutputFolderUri("") }
+    }
+
     fun onPasteClicked() {
         val clipboard = application.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = clipboard.primaryClip
@@ -131,7 +158,7 @@ class DownloadViewModel @Inject constructor(
         val state = localState.value
         if (state.url.isBlank()) return
 
-        val outputDir = getOutputDir()
+        val outputDir = resolveOutputDir()
 
         val config = DownloadConfig(
             url = state.url,
@@ -161,14 +188,41 @@ class DownloadViewModel @Inject constructor(
         onUrlChanged(text)
     }
 
-    private fun getOutputDir(): String {
-        val dir = File(
-            application.getExternalFilesDir(null),
-            "YTD"
-        )
+    private fun resolveOutputDir(): String {
+        val folderUri = localState.value.outputFolderUri
+        if (folderUri.isNotEmpty()) {
+            // Convert SAF tree URI to a file path if possible
+            val uri = Uri.parse(folderUri)
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            // primary: means internal storage
+            if (docId.startsWith("primary:")) {
+                val relativePath = docId.removePrefix("primary:")
+                val path = File(
+                    Environment.getExternalStorageDirectory(),
+                    relativePath,
+                )
+                path.mkdirs()
+                return path.absolutePath
+            }
+        }
+        // Default: app's external files directory
+        val dir = File(application.getExternalFilesDir(null), "YTD")
         dir.mkdirs()
         return dir.absolutePath
     }
 
-    fun getOutputDirPath(): String = getOutputDir()
+    private fun getFolderDisplayName(uriString: String): String {
+        return try {
+            val uri = Uri.parse(uriString)
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            if (docId.startsWith("primary:")) {
+                val path = docId.removePrefix("primary:")
+                if (path.isEmpty()) "Internal Storage" else path
+            } else {
+                docId
+            }
+        } catch (_: Exception) {
+            "Custom Folder"
+        }
+    }
 }

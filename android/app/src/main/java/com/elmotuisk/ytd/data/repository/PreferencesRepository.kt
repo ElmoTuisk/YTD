@@ -20,6 +20,7 @@ data class UserPreferences(
     val lastPlatform: Platform = Platform.YOUTUBE,
     val lastFormat: DownloadFormat = DownloadFormat.VIDEO_MP4,
     val lastQuality: String = "Best",
+    val outputFolderUri: String = "",
 )
 
 @Singleton
@@ -29,6 +30,7 @@ class PreferencesRepository @Inject constructor(
     private val platformKey = stringPreferencesKey("last_platform")
     private val formatKey = stringPreferencesKey("last_format")
     private val qualityKey = stringPreferencesKey("last_quality")
+    private val folderUriKey = stringPreferencesKey("output_folder_uri")
 
     val preferences: Flow<UserPreferences> = context.dataStore.data.map { prefs ->
         UserPreferences(
@@ -39,6 +41,7 @@ class PreferencesRepository @Inject constructor(
                 try { DownloadFormat.valueOf(it) } catch (_: Exception) { DownloadFormat.VIDEO_MP4 }
             } ?: DownloadFormat.VIDEO_MP4,
             lastQuality = prefs[qualityKey] ?: "Best",
+            outputFolderUri = prefs[folderUriKey] ?: "",
         )
     }
 
@@ -52,5 +55,9 @@ class PreferencesRepository @Inject constructor(
 
     suspend fun saveQuality(quality: String) {
         context.dataStore.edit { it[qualityKey] = quality }
+    }
+
+    suspend fun saveOutputFolderUri(uri: String) {
+        context.dataStore.edit { it[folderUriKey] = uri }
     }
 }
