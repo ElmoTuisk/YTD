@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QClipboard, QIcon
 import yt_dlp
+import requests
 
 CONFIG_FILE = "ytd_config.json"
 HISTORY_FILE = "ytd_history.json"
@@ -73,12 +74,17 @@ class DownloadThread(QThread):
             elif self.format_type == "Audio Only (MP3)":
                 ydl_opts['format'] = 'bestaudio/best'
                 quality_val = self.quality.replace('kbps', '')
-                ydl_opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': quality_val,
-                }]
-            
+                ydl_opts['writethumbnail'] = True
+                ydl_opts['postprocessors'] = [
+                    {
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': quality_val,
+                    },
+                    {'key': 'FFmpegMetadata'},
+                    {'key': 'EmbedThumbnail'},
+                ]
+
             elif self.format_type == "Audio Only (WAV)":
                 ydl_opts['format'] = 'bestaudio/best'
                 ydl_opts['postprocessors'] = [{
@@ -334,9 +340,27 @@ class DownloadThread(QThread):
                         artists_items = track_data.get('artists', {}).get('items', [])
                         if artists_items:
                             artist = artists_items[0].get('profile', {}).get('name', '')
+                        # Extract album art
+                        art_url = ''
+                        album_name = ''
+                        album_of_track = track_data.get('albumOfTrack', {})
+                        if album_of_track:
+                            album_name = album_of_track.get('name', '')
+                            cover_art = album_of_track.get('coverArt', {})
+                            sources = cover_art.get('sources', [])
+                            if sources:
+                                art_url = sources[-1].get('url', '')
                         query = f"{name} {artist}".strip()
-                        if query and query not in tracks:
-                            tracks.append(query)
+                        if query:
+                            track_info = {
+                                'query': query,
+                                'title': name,
+                                'artist': artist,
+                                'album': album_name,
+                                'art_url': art_url,
+                            }
+                            if not any(t['query'] == query for t in tracks):
+                                tracks.append(track_info)
                     except (KeyError, IndexError, TypeError):
                         continue
 
@@ -363,6 +387,13 @@ class DownloadThread(QThread):
             if name:
                 collection_name = name
 
+            # Extract album-level cover art
+            album_art_url = ''
+            cover_art = album_data.get('coverArt', {})
+            sources = cover_art.get('sources', [])
+            if sources:
+                album_art_url = sources[-1].get('url', '')
+
             # Navigate to tracks — structure varies
             tracks_obj = album_data.get('tracksV2', album_data.get('tracks', {}))
             items = tracks_obj.get('items', [])
@@ -383,8 +414,16 @@ class DownloadThread(QThread):
                         if isinstance(flat_artists, list) and flat_artists:
                             artist = flat_artists[0].get('name', '')
                     query = f"{name} {artist}".strip()
-                    if query and query not in tracks:
-                        tracks.append(query)
+                    if query:
+                        track_info = {
+                            'query': query,
+                            'title': name,
+                            'artist': artist,
+                            'album': collection_name,
+                            'art_url': album_art_url,
+                        }
+                        if not any(t['query'] == query for t in tracks):
+                            tracks.append(track_info)
                 except (KeyError, IndexError, TypeError):
                     continue
 
@@ -413,9 +452,25 @@ class DownloadThread(QThread):
                     artists_items = track_data.get('artists', {}).get('items', [])
                     if artists_items:
                         artist = artists_items[0].get('profile', {}).get('name', '')
+                # Extract album art and album name
+                art_url = ''
+                album_name = ''
+                album_of_track = track_data.get('albumOfTrack', {})
+                if album_of_track:
+                    album_name = album_of_track.get('name', '')
+                    cover_art = album_of_track.get('coverArt', {})
+                    sources = cover_art.get('sources', [])
+                    if sources:
+                        art_url = sources[-1].get('url', '')
                 query = f"{name} {artist}".strip()
                 if query:
-                    tracks.append(query)
+                    tracks.append({
+                        'query': query,
+                        'title': name,
+                        'artist': artist,
+                        'album': album_name,
+                        'art_url': art_url,
+                    })
 
         return tracks, collection_name
 
@@ -466,8 +521,19 @@ class DownloadThread(QThread):
                     subtitle = t.get('subtitle', '')
                     if title:
                         query = f"{title} {subtitle}".strip()
-                        if query not in tracks:
-                            tracks.append(query)
+                        art_url = ''
+                        images = t.get('images', [])
+                        if images:
+                            art_url = images[-1] if isinstance(images[-1], str) else images[-1].get('url', '')
+                        track_info = {
+                            'query': query,
+                            'title': title,
+                            'artist': subtitle,
+                            'album': '',
+                            'art_url': art_url,
+                        }
+                        if not any(tr['query'] == query for tr in tracks):
+                            tracks.append(track_info)
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
 
@@ -481,8 +547,14 @@ class DownloadThread(QThread):
                         subtitle = t.get('subtitle', '')
                         if title:
                             query = f"{title} {subtitle}".strip()
-                            if query not in tracks:
-                                tracks.append(query)
+                            if not any(tr['query'] == query for tr in tracks):
+                                tracks.append({
+                                    'query': query,
+                                    'title': title,
+                                    'artist': subtitle,
+                                    'album': '',
+                                    'art_url': '',
+                                })
                 except (json.JSONDecodeError, KeyError):
                     pass
 
@@ -511,6 +583,47 @@ class DownloadThread(QThread):
                 if result:
                     return result
         return None
+
+    def _embed_metadata(self, filepath, title='', artist='', album='', art_url=''):
+        """Embed ID3 metadata and album art into an MP3 file."""
+        try:
+            from mutagen.mp3 import MP3
+            from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, ID3NoHeaderError
+
+            try:
+                tags = ID3(filepath)
+            except ID3NoHeaderError:
+                tags = ID3()
+
+            if title:
+                tags.delall('TIT2')
+                tags.add(TIT2(encoding=3, text=title))
+            if artist:
+                tags.delall('TPE1')
+                tags.add(TPE1(encoding=3, text=artist))
+            if album:
+                tags.delall('TALB')
+                tags.add(TALB(encoding=3, text=album))
+
+            if art_url:
+                try:
+                    resp = requests.get(art_url, timeout=10)
+                    if resp.status_code == 200:
+                        mime = resp.headers.get('Content-Type', 'image/jpeg')
+                        tags.delall('APIC')
+                        tags.add(APIC(
+                            encoding=3,
+                            mime=mime,
+                            type=3,  # Cover (front)
+                            desc='Cover',
+                            data=resp.content,
+                        ))
+                except Exception:
+                    pass
+
+            tags.save(filepath)
+        except Exception:
+            pass
 
     def handle_spotify_native(self, url):
         try:
@@ -588,9 +701,17 @@ class DownloadThread(QThread):
                         headers={'Accept': 'application/json'}
                     )
                     if resp.status_code == 200:
-                        title = resp.json().get('title', '')
+                        oembed = resp.json()
+                        title = oembed.get('title', '')
+                        art_url = oembed.get('thumbnail_url', '')
                         if title:
-                            tracks_to_download.append(title)
+                            tracks_to_download.append({
+                                'query': title,
+                                'title': title,
+                                'artist': '',
+                                'album': '',
+                                'art_url': art_url,
+                            })
                             collection_name = title
                 except Exception:
                     pass
@@ -615,9 +736,16 @@ class DownloadThread(QThread):
 
             # Download each track via YouTube search
             total = len(tracks_to_download)
-            for i, search_query in enumerate(tracks_to_download):
+            for i, track_meta in enumerate(tracks_to_download):
                 if self.is_cancelled:
                     raise Exception("Cancelled by user")
+
+                # Support both dict (with metadata) and plain string (legacy)
+                if isinstance(track_meta, str):
+                    search_query = track_meta
+                    track_meta = {'query': search_query, 'title': '', 'artist': '', 'album': '', 'art_url': ''}
+                else:
+                    search_query = track_meta['query']
 
                 self.progress_update.emit({
                     'percent': (i / total) * 100,
@@ -649,8 +777,16 @@ class DownloadThread(QThread):
                             entry = info['entries'][0]
                             filename = ydl.prepare_filename(entry).replace(
                                 ".webm", ".mp3").replace(".m4a", ".mp3").replace(".opus", ".mp3")
-                            date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             if os.path.exists(filename):
+                                # Embed Spotify metadata into the MP3
+                                self._embed_metadata(
+                                    filename,
+                                    title=track_meta.get('title', ''),
+                                    artist=track_meta.get('artist', ''),
+                                    album=track_meta.get('album', ''),
+                                    art_url=track_meta.get('art_url', ''),
+                                )
+                                date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 size_bytes = os.path.getsize(filename)
                                 size_str = self.format_bytes(size_bytes)
                                 self.finished_signal.emit(filename, date_str, size_str)
