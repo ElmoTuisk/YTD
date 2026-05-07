@@ -3,7 +3,7 @@ name: Build macOS DMG
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -24,7 +24,12 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install PyQt6 yt-dlp requests pyinstaller
+          pip install PyQt6 yt-dlp requests mutagen pyinstaller
+
+      - name: Set up build directory
+        run: |
+          cp macos/main.py .
+          cp macos/main.spec .
 
       - name: Copy ffmpeg binaries
         run: |
@@ -77,8 +82,16 @@ jobs:
             rm -rf dist/dmg_temp
           fi
 
-      - name: Upload DMG
+      - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: YTD-macOS
           path: dist/YTD-Installer.dmg
+
+      - name: Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete-asset V1 YTD-macOS.zip --yes 2>/dev/null || true
+          gh release delete-asset V1 YTD-Installer.dmg --yes 2>/dev/null || true
+          gh release upload V1 dist/YTD-Installer.dmg --clobber
